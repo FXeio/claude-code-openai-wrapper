@@ -1,6 +1,7 @@
 services:
   claude-wrapper:
     build: .
+    command: ["poetry", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
     restart: unless-stopped
     ports:
       - "8000"
