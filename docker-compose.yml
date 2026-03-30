@@ -1,7 +1,6 @@
 services:
   claude-wrapper:
     build: .
-    command: ["poetry", "run", "python", "main.py"]
     restart: unless-stopped
     ports:
       - "8000"
@@ -11,6 +10,7 @@ services:
     environment:
       PORT: "8000"
       CLAUDE_WRAPPER_HOST: "0.0.0.0"
+      CLAUDE_CWD: "/workspace"
     env_file:
       - .env
 
