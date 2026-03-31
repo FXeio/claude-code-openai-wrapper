@@ -88,6 +88,10 @@ class MessageAdapter:
 
         content = re.sub(image_pattern, replace_image, content)
 
+        # Strip markdown code fences that wrap the entire response
+        # (e.g. ```json\n{...}\n``` ) — these break clients expecting raw content
+        content = MessageAdapter.strip_markdown_code_fences(content)
+
         # Clean up extra whitespace and newlines
         content = re.sub(r"\n\s*\n\s*\n", "\n\n", content)  # Multiple newlines to double
         content = content.strip()
@@ -96,6 +100,28 @@ class MessageAdapter:
         if not content or content.isspace():
             return "I understand you're testing the system. How can I help you today?"
 
+        return content
+
+    @staticmethod
+    def strip_markdown_code_fences(content: str) -> str:
+        """
+        Strip markdown code fences that wrap the entire response content.
+        E.g. ```json\n{...}\n``` -> {...}
+        """
+        if not content:
+            return content
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            # Remove opening ``` line (with optional language tag)
+            first_newline = stripped.find("\n")
+            if first_newline == -1:
+                return content
+            # Check for closing ```
+            if stripped.endswith("```"):
+                inner = stripped[first_newline + 1:]
+                # Remove trailing ```
+                inner = inner[: -len("```")]
+                return inner.strip()
         return content
 
     @staticmethod
