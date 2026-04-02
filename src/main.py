@@ -33,6 +33,7 @@ from src.models import (
     MCPServerInfoResponse,
     MCPServersListResponse,
     MCPConnectionRequest,
+    ResponseFormat,
     # Anthropic API compatible models
     AnthropicMessagesRequest,
     AnthropicMessagesResponse,
@@ -398,8 +399,16 @@ async def generate_streaming_response(
             request.messages, request.session_id
         )
 
-        # Convert messages to prompt
-        prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+        # Check if messages contain images
+        has_images = any(
+            isinstance(m.content, list) for m in all_messages
+        )
+
+        if has_images:
+            prompt, system_prompt, image_files = MessageAdapter.extract_and_save_images(all_messages)
+        else:
+            prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+            image_files = []
 
         # Add sampling instructions from temperature/top_p if present
         sampling_instructions = request.get_sampling_instructions()
@@ -452,6 +461,8 @@ async def generate_streaming_response(
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
             permission_mode=claude_options.get("permission_mode"),
+            response_format=request.response_format,
+            image_files=image_files,
             stream=True,
         ):
             chunks_buffer.append(chunk)
@@ -660,8 +671,16 @@ async def chat_completions(
                 f"Chat completion: session_id={actual_session_id}, total_messages={len(all_messages)}"
             )
 
-            # Convert messages to prompt
-            prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+            # Check if messages contain images
+            has_images = any(
+                isinstance(m.content, list) for m in all_messages
+            )
+
+            if has_images:
+                prompt, system_prompt, image_files = MessageAdapter.extract_and_save_images(all_messages)
+            else:
+                prompt, system_prompt = MessageAdapter.messages_to_prompt(all_messages)
+                image_files = []
 
             # Add sampling instructions from temperature/top_p if present
             sampling_instructions = request_body.get_sampling_instructions()
@@ -711,6 +730,8 @@ async def chat_completions(
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
                 permission_mode=claude_options.get("permission_mode"),
+                response_format=request_body.response_format,
+                image_files=image_files,
                 stream=False,
             ):
                 chunks.append(chunk)
