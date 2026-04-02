@@ -2,7 +2,7 @@ import base64
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
-from src.models import Message, ContentPart, ImageUrl
+from src.models import Message, ContentPart
 import re
 
 
@@ -102,6 +102,8 @@ class MessageAdapter:
     def _save_image(url: str) -> Optional[Path]:
         """Save a data URI image to a temp file. Returns the file path."""
         if not url.startswith("data:"):
+            import logging
+            logging.getLogger(__name__).warning(f"Skipping non-data-URI image URL (not yet supported): {url[:80]}")
             return None
 
         try:
@@ -124,7 +126,7 @@ class MessageAdapter:
     def filter_content(content: str) -> str:
         """
         Filter content for unsupported features and tool usage.
-        Remove thinking blocks, tool calls, and image references.
+        Remove thinking blocks and tool calls.
         """
         if not content:
             return content
