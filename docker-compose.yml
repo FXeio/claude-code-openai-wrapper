@@ -6,7 +6,7 @@ services:
     ports:
       - "8000"
     volumes:
-      - claude-auth:/root/.claude
+      - claude-auth:/home/appuser/.claude
       - claude-workspace:/workspace
     environment:
       PORT: "8000"

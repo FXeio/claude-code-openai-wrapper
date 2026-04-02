@@ -8,7 +8,8 @@ ENV POETRY_HOME="/usr/local"
 RUN curl -sSL https://install.python-poetry.org | python3 -
 
 # Create non-root user (required: claude CLI refuses --dangerously-skip-permissions as root)
-RUN useradd -m -s /bin/bash appuser
+RUN useradd -m -s /bin/bash appuser && \
+    mkdir -p /workspace && chown appuser:appuser /workspace
 
 # Copy the app code and give ownership to appuser
 COPY --chown=appuser:appuser . /app
