@@ -15,32 +15,70 @@ def get_default_model():
     return DEFAULT_MODEL
 
 
+class ImageUrl(BaseModel):
+    """Image URL for multimodal messages (OpenAI format)."""
+    url: str  # "data:image/png;base64,..." or http(s) URL
+    detail: Optional[str] = None  # ignored, OpenAI compat
+
+
+class JsonSchema(BaseModel):
+    """JSON Schema definition for structured output."""
+    name: str = ""
+    description: Optional[str] = None
+    schema_: Optional[Dict[str, Any]] = Field(default=None, alias="schema")
+    strict: Optional[bool] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class ResponseFormat(BaseModel):
+    """Response format specification (OpenAI compatible)."""
+    type: Literal["text", "json_object", "json_schema"] = "text"
+    json_schema: Optional[JsonSchema] = None
+
+
 class ContentPart(BaseModel):
     """Content part for multimodal messages (OpenAI format)."""
-
-    type: Literal["text"]
-    text: str
+    type: Literal["text", "image_url"]
+    text: Optional[str] = None
+    image_url: Optional[ImageUrl] = None
 
 
 class Message(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: Union[str, List[ContentPart]]
+    content: Union[str, List[ContentPart], List[Dict[str, Any]]]
     name: Optional[str] = None
 
     @model_validator(mode="after")
     def normalize_content(self):
-        """Convert array content to string for Claude Code compatibility."""
+        """Convert array content to string only if all parts are text.
+        Preserve list when image parts are present."""
         if isinstance(self.content, list):
-            # Extract text from content parts and concatenate
-            text_parts = []
+            has_images = False
             for part in self.content:
-                if isinstance(part, ContentPart) and part.type == "text":
-                    text_parts.append(part.text)
-                elif isinstance(part, dict) and part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
+                part_type = part.type if isinstance(part, ContentPart) else part.get("type") if isinstance(part, dict) else None
+                if part_type == "image_url":
+                    has_images = True
+                    break
 
-            # Join all text parts with newlines
-            self.content = "\n".join(text_parts) if text_parts else ""
+            if has_images:
+                # Preserve as list — will be processed by message_adapter
+                normalized = []
+                for part in self.content:
+                    if isinstance(part, ContentPart):
+                        normalized.append(part)
+                    elif isinstance(part, dict):
+                        normalized.append(ContentPart(**part))
+                self.content = normalized
+            else:
+                # Text-only: flatten to string (original behavior)
+                text_parts = []
+                for part in self.content:
+                    if isinstance(part, ContentPart) and part.type == "text":
+                        text_parts.append(part.text)
+                    elif isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                self.content = "\n".join(text_parts) if text_parts else ""
 
         return self
 
@@ -78,6 +116,10 @@ class ChatCompletionRequest(BaseModel):
     )
     stream_options: Optional[StreamOptions] = Field(
         default=None, description="Options for streaming responses"
+    )
+    response_format: Optional[ResponseFormat] = Field(
+        default=None,
+        description="Response format specification. Supports 'json_object' and 'json_schema' for structured output.",
     )
 
     @field_validator("n")

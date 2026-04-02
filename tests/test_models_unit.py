@@ -570,3 +570,98 @@ class TestAnthropicModels:
         assert response.role == "assistant"
         assert response.stop_reason == "end_turn"
         assert response.id.startswith("msg_")
+
+
+# ============================================================================
+# New tests for Task 2: ImageUrl, ResponseFormat, JsonSchema, ContentPart expansion
+# ============================================================================
+
+from src.models import (
+    ImageUrl,
+    ResponseFormat,
+    JsonSchema,
+)
+
+
+class TestImageUrl:
+    """Test ImageUrl model."""
+
+    def test_create_with_data_uri(self):
+        """Can create ImageUrl with base64 data URI."""
+        url = ImageUrl(url="data:image/png;base64,iVBORw0KGgo=")
+        assert url.url.startswith("data:image/png")
+
+    def test_create_with_http_url(self):
+        """Can create ImageUrl with HTTP URL."""
+        url = ImageUrl(url="https://example.com/image.png")
+        assert url.url.startswith("https://")
+
+    def test_detail_field_optional(self):
+        """detail field is optional and ignored."""
+        url = ImageUrl(url="https://example.com/img.png", detail="high")
+        assert url.detail == "high"
+
+
+class TestResponseFormat:
+    """Test ResponseFormat model."""
+
+    def test_default_type_is_text(self):
+        """Default type is text."""
+        fmt = ResponseFormat()
+        assert fmt.type == "text"
+
+    def test_json_object_type(self):
+        """Can create json_object format."""
+        fmt = ResponseFormat(type="json_object")
+        assert fmt.type == "json_object"
+
+    def test_json_schema_type(self):
+        """Can create json_schema format with schema."""
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        fmt = ResponseFormat(
+            type="json_schema",
+            json_schema=JsonSchema(name="test", schema=schema),
+        )
+        assert fmt.type == "json_schema"
+        assert fmt.json_schema.schema_ == schema
+
+
+class TestContentPartExpanded:
+    """Test expanded ContentPart with image_url support."""
+
+    def test_text_content_part(self):
+        """Text content part still works."""
+        part = ContentPart(type="text", text="Hello")
+        assert part.type == "text"
+        assert part.text == "Hello"
+
+    def test_image_url_content_part(self):
+        """Can create image_url content part."""
+        part = ContentPart(
+            type="image_url",
+            image_url=ImageUrl(url="data:image/png;base64,abc123"),
+        )
+        assert part.type == "image_url"
+        assert part.image_url.url == "data:image/png;base64,abc123"
+
+
+class TestMessageNormalizeContentUpdated:
+    """Test updated normalize_content behavior."""
+
+    def test_text_only_array_flattened_to_string(self):
+        """Array of text-only parts still flattens to string."""
+        msg = Message(role="user", content=[
+            {"type": "text", "text": "Hello"},
+            {"type": "text", "text": "World"},
+        ])
+        assert msg.content == "Hello\nWorld"
+
+    def test_array_with_image_preserved_as_list(self):
+        """Array with image_url parts is preserved as list."""
+        content = [
+            {"type": "text", "text": "Describe this image"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ]
+        msg = Message(role="user", content=content)
+        assert isinstance(msg.content, list)
+        assert len(msg.content) == 2
