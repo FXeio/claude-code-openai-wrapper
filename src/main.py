@@ -437,10 +437,16 @@ async def generate_streaming_response(
 
         # Handle tools - disabled by default for OpenAI compatibility
         if not request.enable_tools:
-            # Disable all tools by using CLAUDE_TOOLS constant
-            claude_options["disallowed_tools"] = CLAUDE_TOOLS
-            claude_options["max_turns"] = 1  # Single turn for Q&A
-            logger.info("Tools disabled (default behavior for OpenAI compatibility)")
+            if image_files:
+                # Images need the Read tool to be visible to Claude
+                claude_options["allowed_tools"] = ["Read"]
+                claude_options["permission_mode"] = "bypassPermissions"
+                logger.info("Tools limited to Read (required for image processing)")
+            else:
+                # Disable all tools by using CLAUDE_TOOLS constant
+                claude_options["disallowed_tools"] = CLAUDE_TOOLS
+                claude_options["max_turns"] = 1  # Single turn for Q&A
+                logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
             claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS
@@ -709,10 +715,16 @@ async def chat_completions(
 
             # Handle tools - disabled by default for OpenAI compatibility
             if not request_body.enable_tools:
-                # Disable all tools by using CLAUDE_TOOLS constant
-                claude_options["disallowed_tools"] = CLAUDE_TOOLS
-                claude_options["max_turns"] = 1  # Single turn for Q&A
-                logger.info("Tools disabled (default behavior for OpenAI compatibility)")
+                if image_files:
+                    # Images need the Read tool to be visible to Claude
+                    claude_options["allowed_tools"] = ["Read"]
+                    claude_options["permission_mode"] = "bypassPermissions"
+                    logger.info("Tools limited to Read (required for image processing)")
+                else:
+                    # Disable all tools by using CLAUDE_TOOLS constant
+                    claude_options["disallowed_tools"] = CLAUDE_TOOLS
+                    claude_options["max_turns"] = 1  # Single turn for Q&A
+                    logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
                 claude_options["allowed_tools"] = DEFAULT_ALLOWED_TOOLS

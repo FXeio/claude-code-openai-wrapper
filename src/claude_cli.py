@@ -157,10 +157,12 @@ class ClaudeCodeCLI:
                         options.output_format = {"type": "json_object"}
                         options.betas = ["structured-outputs-2025-11-13"]
 
-                # Attach image files
+                # Copy image files to CWD so Claude can Read them
                 if image_files:
-                    file_specs = [f"img_{i}:{path}" for i, path in enumerate(image_files)]
-                    options.extra_args = {"file": file_specs}
+                    import shutil
+                    for path in image_files:
+                        dest = self.cwd / path.name
+                        shutil.copy2(path, dest)
 
                 # Handle session continuity
                 if continue_session:
@@ -195,11 +197,13 @@ class ClaudeCodeCLI:
                         else:
                             yield message
                 finally:
-                    # Clean up temp image files
+                    # Clean up temp image files (both originals and CWD copies)
                     if image_files:
                         for path in image_files:
                             try:
                                 path.unlink(missing_ok=True)
+                                cwd_copy = self.cwd / path.name
+                                cwd_copy.unlink(missing_ok=True)
                             except Exception as e:
                                 logger.warning(f"Failed to clean up temp image file {path}: {e}")
 
