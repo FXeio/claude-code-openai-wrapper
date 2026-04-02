@@ -122,7 +122,11 @@ class ClaudeCodeCLI:
 
             try:
                 # Build SDK options
-                options = ClaudeAgentOptions(max_turns=max_turns, cwd=self.cwd)
+                options = ClaudeAgentOptions(
+                    max_turns=max_turns,
+                    cwd=self.cwd,
+                    stderr=lambda line: logger.error(f"Claude CLI stderr: {line}"),
+                )
 
                 # Set model if specified
                 if model:
