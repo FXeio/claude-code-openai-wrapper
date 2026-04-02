@@ -8,6 +8,8 @@ import logging
 
 from claude_agent_sdk import query, ClaudeAgentOptions
 
+from src.models import ResponseFormat
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,6 +106,8 @@ class ClaudeCodeCLI:
         session_id: Optional[str] = None,
         continue_session: bool = False,
         permission_mode: Optional[str] = None,
+        response_format: Optional[ResponseFormat] = None,
+        image_files: Optional[List[Path]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks."""
 
@@ -141,6 +145,23 @@ class ClaudeCodeCLI:
                 if permission_mode:
                     options.permission_mode = permission_mode
 
+                # Set structured output format
+                if response_format:
+                    if response_format.type == "json_schema" and response_format.json_schema:
+                        options.output_format = {
+                            "type": "json_schema",
+                            "schema": response_format.json_schema.schema_,
+                        }
+                        options.betas = ["structured-outputs-2025-11-13"]
+                    elif response_format.type == "json_object":
+                        options.output_format = {"type": "json_object"}
+                        options.betas = ["structured-outputs-2025-11-13"]
+
+                # Attach image files
+                if image_files:
+                    file_specs = [f"img_{i}:{path}" for i, path in enumerate(image_files)]
+                    options.extra_args = {"--file": file_specs}
+
                 # Handle session continuity
                 if continue_session:
                     options.continue_session = True
@@ -148,30 +169,39 @@ class ClaudeCodeCLI:
                     options.resume = session_id
 
                 # Run the query and yield messages
-                async for message in query(prompt=prompt, options=options):
-                    # Debug logging
-                    logger.debug(f"Raw SDK message type: {type(message)}")
-                    logger.debug(f"Raw SDK message: {message}")
+                try:
+                    async for message in query(prompt=prompt, options=options):
+                        # Debug logging
+                        logger.debug(f"Raw SDK message type: {type(message)}")
+                        logger.debug(f"Raw SDK message: {message}")
 
-                    # Convert message object to dict if needed
-                    if hasattr(message, "__dict__") and not isinstance(message, dict):
-                        # Convert object to dict for consistent handling
-                        message_dict = {}
+                        # Convert message object to dict if needed
+                        if hasattr(message, "__dict__") and not isinstance(message, dict):
+                            # Convert object to dict for consistent handling
+                            message_dict = {}
 
-                        # Get all attributes from the object
-                        for attr_name in dir(message):
-                            if not attr_name.startswith("_"):  # Skip private attributes
-                                try:
-                                    attr_value = getattr(message, attr_name)
-                                    if not callable(attr_value):  # Skip methods
-                                        message_dict[attr_name] = attr_value
-                                except:
-                                    pass
+                            # Get all attributes from the object
+                            for attr_name in dir(message):
+                                if not attr_name.startswith("_"):  # Skip private attributes
+                                    try:
+                                        attr_value = getattr(message, attr_name)
+                                        if not callable(attr_value):  # Skip methods
+                                            message_dict[attr_name] = attr_value
+                                    except:
+                                        pass
 
-                        logger.debug(f"Converted message dict: {message_dict}")
-                        yield message_dict
-                    else:
-                        yield message
+                            logger.debug(f"Converted message dict: {message_dict}")
+                            yield message_dict
+                        else:
+                            yield message
+                finally:
+                    # Clean up temp image files
+                    if image_files:
+                        for path in image_files:
+                            try:
+                                path.unlink(missing_ok=True)
+                            except Exception as e:
+                                logger.warning(f"Failed to clean up temp image file {path}: {e}")
 
             finally:
                 # Restore original environment (if we changed anything)
