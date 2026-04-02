@@ -108,6 +108,7 @@ class ClaudeCodeCLI:
         permission_mode: Optional[str] = None,
         response_format: Optional[ResponseFormat] = None,
         image_files: Optional[List[Path]] = None,
+        tools: Optional[List[str]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run Claude Agent using the Python SDK and yield response chunks."""
 
@@ -136,6 +137,8 @@ class ClaudeCodeCLI:
                     options.system_prompt = {"type": "preset", "preset": "claude_code"}
 
                 # Set tool restrictions
+                if tools:
+                    options.tools = tools
                 if allowed_tools:
                     options.allowed_tools = allowed_tools
                 if disallowed_tools:
@@ -152,10 +155,10 @@ class ClaudeCodeCLI:
                             "type": "json_schema",
                             "schema": response_format.json_schema.schema_,
                         }
-                        options.betas = ["structured-outputs-2025-11-13"]
+                        # Note: betas only work with API key auth, not CLI auth
                     elif response_format.type == "json_object":
                         options.output_format = {"type": "json_object"}
-                        options.betas = ["structured-outputs-2025-11-13"]
+                        # Note: betas only work with API key auth, not CLI auth
 
                 # Copy image files to CWD so Claude can Read them
                 if image_files:

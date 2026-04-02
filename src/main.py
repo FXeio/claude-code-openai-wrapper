@@ -439,7 +439,8 @@ async def generate_streaming_response(
         if not request.enable_tools:
             if image_files:
                 # Images need the Read tool to be visible to Claude
-                claude_options["allowed_tools"] = ["Read"]
+                # Use "tools" (not "allowed_tools") to limit which tools are registered with the API
+                claude_options["tools"] = ["Read"]
                 claude_options["permission_mode"] = "bypassPermissions"
                 logger.info("Tools limited to Read (required for image processing)")
             else:
@@ -464,6 +465,7 @@ async def generate_streaming_response(
             system_prompt=system_prompt,
             model=claude_options.get("model"),
             max_turns=claude_options.get("max_turns", 10),
+            tools=claude_options.get("tools"),
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
             permission_mode=claude_options.get("permission_mode"),
@@ -739,6 +741,7 @@ async def chat_completions(
                 system_prompt=system_prompt,
                 model=claude_options.get("model"),
                 max_turns=claude_options.get("max_turns", 10),
+                tools=claude_options.get("tools"),
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
                 permission_mode=claude_options.get("permission_mode"),
