@@ -160,7 +160,7 @@ class ClaudeCodeCLI:
                 # Attach image files
                 if image_files:
                     file_specs = [f"img_{i}:{path}" for i, path in enumerate(image_files)]
-                    options.extra_args = {"--file": file_specs}
+                    options.extra_args = {"file": file_specs}
 
                 # Handle session continuity
                 if continue_session:
