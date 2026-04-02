@@ -23,6 +23,10 @@ WORKDIR /app
 # Install Python dependencies with Poetry
 RUN poetry install --no-root
 
+# Create non-root user (required: claude CLI refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash appuser && chown -R appuser:appuser /app
+USER appuser
+
 # Expose the port (default 8000)
 EXPOSE 8000
 
