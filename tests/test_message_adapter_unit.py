@@ -6,9 +6,13 @@ Tests the MessageAdapter class for message format conversion.
 These are pure unit tests that don't require a running server.
 """
 
+import os
+import base64
+import tempfile
+from pathlib import Path
 import pytest
 from src.message_adapter import MessageAdapter
-from src.models import Message
+from src.models import Message, ContentPart, ImageUrl
 
 
 class TestMessagesToPrompt:
@@ -214,21 +218,17 @@ class TestFilterContent:
 
         assert "<suggest>" not in result
 
-    def test_replaces_image_references(self):
-        """Image references are replaced with placeholder."""
+    def test_preserves_image_references(self):
+        """Image references are preserved in output."""
         content = "Here's the image: [Image: screenshot.png] as you can see"
         result = MessageAdapter.filter_content(content)
+        assert "[Image: screenshot.png]" in result
 
-        assert "[Image: Content not supported by Claude Code]" in result
-        assert "screenshot.png" not in result
-
-    def test_replaces_base64_image_data(self):
-        """Base64 image data is replaced."""
+    def test_preserves_base64_image_data(self):
+        """Base64 image data in output responses is preserved."""
         content = "Image: data:image/png;base64,iVBORw0KGgoAAAANSUhE end"
         result = MessageAdapter.filter_content(content)
-
-        assert "base64" not in result
-        assert "iVBORw0" not in result
+        assert "data:image/png" in result
 
     def test_collapses_multiple_newlines(self):
         """Multiple consecutive newlines are collapsed."""
@@ -308,3 +308,74 @@ class TestEstimateTokens:
         result = MessageAdapter.estimate_tokens(text)
         # 67 chars / 4 = 16 tokens
         assert result == 16
+
+
+class TestExtractAndSaveImages:
+    """Test MessageAdapter.extract_and_save_images()"""
+
+    def test_no_images_returns_empty_list(self):
+        """Messages with no images return empty file list."""
+        messages = [Message(role="user", content="Hello")]
+        prompt, system, files = MessageAdapter.extract_and_save_images(messages)
+        assert files == []
+        assert "Hello" in prompt
+
+    def test_extracts_base64_image_to_temp_file(self):
+        """Base64 image is saved to temp file."""
+        pixel = base64.b64encode(b'\x89PNG\r\n\x1a\n' + b'\x00' * 50).decode()
+        content = [
+            {"type": "text", "text": "What is this?"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{pixel}"}},
+        ]
+        messages = [Message(role="user", content=content)]
+        prompt, system, files = MessageAdapter.extract_and_save_images(messages)
+
+        assert len(files) == 1
+        assert files[0].exists()
+        assert files[0].suffix == ".png"
+        assert "What is this?" in prompt
+
+        for f in files:
+            f.unlink(missing_ok=True)
+
+    def test_mime_type_determines_extension(self):
+        """MIME type determines temp file extension."""
+        data = base64.b64encode(b'\xff\xd8\xff\xe0' + b'\x00' * 50).decode()
+        content = [
+            {"type": "text", "text": "Describe"},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}},
+        ]
+        messages = [Message(role="user", content=content)]
+        prompt, system, files = MessageAdapter.extract_and_save_images(messages)
+
+        assert len(files) == 1
+        assert files[0].suffix == ".jpg"
+
+        for f in files:
+            f.unlink(missing_ok=True)
+
+    def test_multiple_images(self):
+        """Multiple images are all saved."""
+        pixel = base64.b64encode(b'\x89PNG' + b'\x00' * 20).decode()
+        content = [
+            {"type": "text", "text": "Compare these"},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{pixel}"}},
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{pixel}"}},
+        ]
+        messages = [Message(role="user", content=content)]
+        prompt, system, files = MessageAdapter.extract_and_save_images(messages)
+
+        assert len(files) == 2
+
+        for f in files:
+            f.unlink(missing_ok=True)
+
+    def test_system_prompt_extracted(self):
+        """System prompt is still extracted correctly."""
+        messages = [
+            Message(role="system", content="Be helpful"),
+            Message(role="user", content="Hi"),
+        ]
+        prompt, system, files = MessageAdapter.extract_and_save_images(messages)
+        assert system == "Be helpful"
+        assert files == []

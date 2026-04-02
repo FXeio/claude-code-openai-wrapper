@@ -1,5 +1,8 @@
-from typing import List, Optional, Dict, Any
-from src.models import Message
+import base64
+import tempfile
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
+from src.models import Message, ContentPart, ImageUrl
 import re
 
 
@@ -32,6 +35,90 @@ class MessageAdapter:
             prompt += "\n\nHuman: Please continue."
 
         return prompt, system_prompt
+
+    MIME_TO_EXT = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+    }
+
+    @staticmethod
+    def extract_and_save_images(
+        messages: List[Message],
+    ) -> Tuple[str, Optional[str], List[Path]]:
+        """
+        Process messages: extract images to temp files, build prompt text.
+        Returns (prompt, system_prompt, temp_image_files).
+        """
+        system_prompt = None
+        conversation_parts = []
+        temp_files = []
+
+        for message in messages:
+            if message.role == "system":
+                system_prompt = message.content if isinstance(message.content, str) else ""
+                continue
+
+            # If content is a list, it may contain images
+            if isinstance(message.content, list):
+                text_parts = []
+                for part in message.content:
+                    if isinstance(part, ContentPart):
+                        if part.type == "text" and part.text:
+                            text_parts.append(part.text)
+                        elif part.type == "image_url" and part.image_url:
+                            path = MessageAdapter._save_image(part.image_url.url)
+                            if path:
+                                temp_files.append(path)
+                                text_parts.append(f"[See attached image: {path.name}]")
+                    elif isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part.get("type") == "image_url":
+                            url = part.get("image_url", {}).get("url", "")
+                            path = MessageAdapter._save_image(url)
+                            if path:
+                                temp_files.append(path)
+                                text_parts.append(f"[See attached image: {path.name}]")
+
+                content_text = "\n".join(text_parts)
+            else:
+                content_text = message.content
+
+            role_prefix = "Human" if message.role == "user" else "Assistant"
+            conversation_parts.append(f"{role_prefix}: {content_text}")
+
+        prompt = "\n\n".join(conversation_parts)
+
+        if messages and messages[-1].role != "user":
+            prompt += "\n\nHuman: Please continue."
+
+        return prompt, system_prompt, temp_files
+
+    @staticmethod
+    def _save_image(url: str) -> Optional[Path]:
+        """Save a data URI image to a temp file. Returns the file path."""
+        if not url.startswith("data:"):
+            return None
+
+        try:
+            # Parse "data:image/png;base64,iVBOR..."
+            header, b64_data = url.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0]
+            ext = MessageAdapter.MIME_TO_EXT.get(mime_type, ".png")
+
+            image_bytes = base64.b64decode(b64_data)
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False, suffix=ext, prefix="claude_img_"
+            )
+            tmp.write(image_bytes)
+            tmp.close()
+            return Path(tmp.name)
+        except Exception:
+            return None
 
     @staticmethod
     def filter_content(content: str) -> str:
@@ -79,14 +166,6 @@ class MessageAdapter:
 
             for pattern in tool_patterns:
                 content = re.sub(pattern, "", content, flags=re.DOTALL)
-
-        # Pattern to match image references or base64 data
-        image_pattern = r"\[Image:.*?\]|data:image/.*?;base64,.*?(?=\s|$)"
-
-        def replace_image(match):
-            return "[Image: Content not supported by Claude Code]"
-
-        content = re.sub(image_pattern, replace_image, content)
 
         # Strip markdown code fences that wrap the entire response
         # (e.g. ```json\n{...}\n``` ) — these break clients expecting raw content
