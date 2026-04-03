@@ -34,6 +34,7 @@ from src.models import (
     MCPServersListResponse,
     MCPConnectionRequest,
     ResponseFormat,
+    JsonSchema,
     # Anthropic API compatible models
     AnthropicMessagesRequest,
     AnthropicMessagesResponse,
@@ -455,6 +456,17 @@ async def generate_streaming_response(
             claude_options["permission_mode"] = "bypassPermissions"
             logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
+        # Sanitize JSON schema keys if needed (Anthropic API rejects @ in property keys)
+        sanitized_keys = {}
+        effective_response_format = request.response_format
+        if request.response_format and request.response_format.type == "json_schema" and request.response_format.json_schema and request.response_format.json_schema.schema_:
+            sanitized_schema, sanitized_keys = ClaudeCodeCLI._sanitize_schema_keys(request.response_format.json_schema.schema_)
+            if sanitized_keys:
+                effective_response_format = ResponseFormat(
+                    type="json_schema",
+                    json_schema=JsonSchema(name=request.response_format.json_schema.name, schema=sanitized_schema),
+                )
+
         # Run Claude Code
         chunks_buffer = []
         role_sent = False  # Track if we've sent the initial role chunk
@@ -469,7 +481,7 @@ async def generate_streaming_response(
             allowed_tools=claude_options.get("allowed_tools"),
             disallowed_tools=claude_options.get("disallowed_tools"),
             permission_mode=claude_options.get("permission_mode"),
-            response_format=request.response_format,
+            response_format=effective_response_format,
             image_files=image_files,
             stream=True,
         ):
@@ -588,7 +600,7 @@ async def generate_streaming_response(
         # Extract assistant response from all chunks
         assistant_content = None
         if chunks_buffer:
-            assistant_content = claude_cli.parse_claude_message(chunks_buffer)
+            assistant_content = claude_cli.parse_claude_message(chunks_buffer, sanitized_keys=sanitized_keys)
 
             # Store in session if applicable
             if actual_session_id and assistant_content:
@@ -734,6 +746,17 @@ async def chat_completions(
                 claude_options["permission_mode"] = "bypassPermissions"
                 logger.info(f"Tools enabled by user request: {DEFAULT_ALLOWED_TOOLS}")
 
+            # Sanitize JSON schema keys if needed
+            sanitized_keys = {}
+            effective_response_format = request_body.response_format
+            if request_body.response_format and request_body.response_format.type == "json_schema" and request_body.response_format.json_schema and request_body.response_format.json_schema.schema_:
+                sanitized_schema, sanitized_keys = ClaudeCodeCLI._sanitize_schema_keys(request_body.response_format.json_schema.schema_)
+                if sanitized_keys:
+                    effective_response_format = ResponseFormat(
+                        type="json_schema",
+                        json_schema=JsonSchema(name=request_body.response_format.json_schema.name, schema=sanitized_schema),
+                    )
+
             # Collect all chunks
             chunks = []
             async for chunk in claude_cli.run_completion(
@@ -745,14 +768,14 @@ async def chat_completions(
                 allowed_tools=claude_options.get("allowed_tools"),
                 disallowed_tools=claude_options.get("disallowed_tools"),
                 permission_mode=claude_options.get("permission_mode"),
-                response_format=request_body.response_format,
+                response_format=effective_response_format,
                 image_files=image_files,
                 stream=False,
             ):
                 chunks.append(chunk)
 
             # Extract assistant message
-            raw_assistant_content = claude_cli.parse_claude_message(chunks)
+            raw_assistant_content = claude_cli.parse_claude_message(chunks, sanitized_keys=sanitized_keys)
 
             if not raw_assistant_content:
                 raise HTTPException(status_code=500, detail="No response from Claude Code")

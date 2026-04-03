@@ -1,8 +1,10 @@
 import os
+import re
+import json
 import tempfile
 import atexit
 import shutil
-from typing import AsyncGenerator, Dict, Any, Optional, List
+from typing import AsyncGenerator, Dict, Any, Optional, List, Tuple
 from pathlib import Path
 import logging
 
@@ -159,10 +161,8 @@ class ClaudeCodeCLI:
                             "type": "json_schema",
                             "schema": response_format.json_schema.schema_,
                         }
-                        # Note: betas only work with API key auth, not CLI auth
                     elif response_format.type == "json_object":
                         options.output_format = {"type": "json_object"}
-                        # Note: betas only work with API key auth, not CLI auth
 
                 # Copy image files to CWD so Claude can Read them
                 if image_files:
@@ -233,16 +233,90 @@ class ClaudeCodeCLI:
                 "error_message": str(e),
             }
 
-    def parse_claude_message(self, messages: List[Dict[str, Any]]) -> Optional[str]:
+    @staticmethod
+    def _sanitize_schema_keys(schema: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        """Sanitize JSON schema property keys that contain characters invalid for Claude API.
+
+        Returns (sanitized_schema, key_mapping) where key_mapping maps original -> sanitized
+        for keys that were changed.
+        """
+        invalid_pattern = re.compile(r'[^a-zA-Z0-9_.\-]')
+        key_mapping = {}  # original_key -> sanitized_key
+
+        def sanitize_obj(obj):
+            if isinstance(obj, dict):
+                result = {}
+                for k, v in obj.items():
+                    new_key = k
+                    if k == "properties" and isinstance(v, dict):
+                        # Sanitize property keys
+                        new_props = {}
+                        for prop_key, prop_val in v.items():
+                            if invalid_pattern.search(prop_key):
+                                sanitized = invalid_pattern.sub('_', prop_key)
+                                key_mapping[prop_key] = sanitized
+                                new_props[sanitized] = sanitize_obj(prop_val)
+                            else:
+                                new_props[prop_key] = sanitize_obj(prop_val)
+                        result[k] = new_props
+                    elif k == "required" and isinstance(v, list):
+                        # Also sanitize required key references
+                        result[k] = [key_mapping.get(item, item) if isinstance(item, str) else item for item in v]
+                    else:
+                        result[k] = sanitize_obj(v)
+                return result
+            elif isinstance(obj, list):
+                return [sanitize_obj(item) for item in obj]
+            return obj
+
+        return sanitize_obj(schema), key_mapping
+
+    @staticmethod
+    def _unsanitize_keys(data: Any, key_mapping: Dict[str, str]) -> Any:
+        """Reverse the key sanitization in response data.
+
+        key_mapping maps original_key -> sanitized_key, so we reverse it.
+        """
+        if not key_mapping:
+            return data
+        reverse_map = {v: k for k, v in key_mapping.items()}
+
+        def restore(obj):
+            if isinstance(obj, dict):
+                return {reverse_map.get(k, k): restore(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [restore(item) for item in obj]
+            return obj
+
+        return restore(data)
+
+    def parse_claude_message(self, messages: List[Dict[str, Any]], sanitized_keys: Optional[Dict[str, str]] = None) -> Optional[str]:
         """Extract the assistant message from Claude Agent SDK messages.
 
-        Prioritizes ResultMessage.result for multi-turn conversations,
+        Prioritizes structured_output (for json_schema), then ResultMessage.result,
         falls back to last AssistantMessage content.
         """
-        # First, check for ResultMessage with 'result' field (multi-turn completion)
+        # First, check for structured_output in ResultMessage
+        for message in messages:
+            if message.get("subtype") == "success" and "structured_output" in message:
+                output = message["structured_output"]
+                if output is not None:
+                    if sanitized_keys:
+                        output = self._unsanitize_keys(output, sanitized_keys)
+                    return json.dumps(output)
+
+        # Then check for ResultMessage with 'result' field
         for message in messages:
             if message.get("subtype") == "success" and "result" in message:
-                return message["result"]
+                result = message["result"]
+                if result and sanitized_keys:
+                    try:
+                        parsed = json.loads(result)
+                        parsed = self._unsanitize_keys(parsed, sanitized_keys)
+                        return json.dumps(parsed)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                return result
 
         # Collect all text from AssistantMessages (take the last one with text)
         last_text = None
