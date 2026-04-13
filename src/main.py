@@ -55,6 +55,47 @@ from src.rate_limiter import (
 )
 from src.constants import CLAUDE_MODELS, CLAUDE_TOOLS, DEFAULT_ALLOWED_TOOLS
 
+
+def _extract_cli_error_detail(chunks: list, fallback: str = "No response from Claude Code") -> Dict[str, Any]:
+    """Build a structured error detail from CLI result chunks.
+
+    Looks through collected chunks for an error result message (e.g.
+    ``error_max_turns``, ``error_during_execution``, refusal) and returns
+    a dict with everything useful for the caller to debug. Returned dict is
+    safe to hand to ``HTTPException(detail=...)`` — FastAPI will JSON-serialize it.
+    """
+    detail: Dict[str, Any] = {"message": fallback}
+    for chunk in chunks or []:
+        if not isinstance(chunk, dict):
+            continue
+        subtype = chunk.get("subtype")
+        is_error = chunk.get("is_error")
+        stop_reason = chunk.get("stop_reason")
+        if not (is_error or (isinstance(subtype, str) and subtype.startswith("error")) or stop_reason == "refusal"):
+            continue
+        detail = {
+            "message": fallback,
+            "subtype": subtype,
+            "is_error": bool(is_error),
+            "stop_reason": stop_reason,
+            "num_turns": chunk.get("num_turns"),
+            "duration_ms": chunk.get("duration_ms"),
+            "errors": chunk.get("errors"),
+            "error_message": chunk.get("error_message"),
+            "exit_code": chunk.get("exit_code"),
+            "session_id": chunk.get("session_id"),
+        }
+        # Prefer the CLI's own summary when present.
+        if chunk.get("errors"):
+            try:
+                detail["message"] = "; ".join(str(e) for e in chunk["errors"])
+            except Exception:
+                pass
+        elif chunk.get("error_message"):
+            detail["message"] = chunk["error_message"]
+        break
+    return {k: v for k, v in detail.items() if v is not None}
+
 # Load environment variables
 load_dotenv()
 
@@ -447,7 +488,9 @@ async def generate_streaming_response(
             else:
                 # Disable all tools by using CLAUDE_TOOLS constant
                 claude_options["disallowed_tools"] = CLAUDE_TOOLS
-                claude_options["max_turns"] = 1  # Single turn for Q&A
+                # --json-schema uses an internal StructuredOutput tool that needs
+                # 2 turns (tool_use + tool_result). With max_turns=1 it always errors.
+                claude_options["max_turns"] = 2 if request.response_format else 1
                 logger.info("Tools disabled (default behavior for OpenAI compatibility)")
         else:
             # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -737,7 +780,9 @@ async def chat_completions(
                 else:
                     # Disable all tools by using CLAUDE_TOOLS constant
                     claude_options["disallowed_tools"] = CLAUDE_TOOLS
-                    claude_options["max_turns"] = 1  # Single turn for Q&A
+                    # --json-schema uses an internal StructuredOutput tool that needs
+                    # 2 turns (tool_use + tool_result). With max_turns=1 it always errors.
+                    claude_options["max_turns"] = 2 if request_body.response_format else 1
                     logger.info("Tools disabled (default behavior for OpenAI compatibility)")
             else:
                 # Enable tools - use default safe subset (Read, Glob, Grep, Bash, Write, Edit)
@@ -778,7 +823,7 @@ async def chat_completions(
             raw_assistant_content = claude_cli.parse_claude_message(chunks, sanitized_keys=sanitized_keys)
 
             if not raw_assistant_content:
-                raise HTTPException(status_code=500, detail="No response from Claude Code")
+                raise HTTPException(status_code=500, detail=_extract_cli_error_detail(chunks))
 
             # Filter out tool usage and thinking blocks
             assistant_content = MessageAdapter.filter_content(raw_assistant_content)
@@ -886,7 +931,7 @@ async def anthropic_messages(
         raw_assistant_content = claude_cli.parse_claude_message(chunks)
 
         if not raw_assistant_content:
-            raise HTTPException(status_code=500, detail="No response from Claude Code")
+            raise HTTPException(status_code=500, detail=_extract_cli_error_detail(chunks))
 
         # Filter out tool usage and thinking blocks
         assistant_content = MessageAdapter.filter_content(raw_assistant_content)
@@ -1968,13 +2013,29 @@ async def get_mcp_stats(
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    """Format HTTP exceptions as OpenAI-style errors."""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": {"message": exc.detail, "type": "api_error", "code": str(exc.status_code)}
-        },
-    )
+    """Format HTTP exceptions as OpenAI-style errors.
+
+    When ``detail`` is a dict (structured CLI error) we keep OpenAI shape — ``message``
+    stays a string — and attach the rest under ``error.details`` so clients that don't
+    know about it keep working, while clients that need the diagnostics get them.
+    """
+    if isinstance(exc.detail, dict):
+        detail_dict = dict(exc.detail)
+        message = detail_dict.pop("message", None) or "Internal error"
+        error_obj: Dict[str, Any] = {
+            "message": message,
+            "type": "api_error",
+            "code": str(exc.status_code),
+        }
+        if detail_dict:
+            error_obj["details"] = detail_dict
+    else:
+        error_obj = {
+            "message": exc.detail,
+            "type": "api_error",
+            "code": str(exc.status_code),
+        }
+    return JSONResponse(status_code=exc.status_code, content={"error": error_obj})
 
 
 def find_available_port(start_port: int = 8000, max_attempts: int = 10) -> int:

@@ -177,6 +177,20 @@ class ClaudeCodeCLI:
                 elif session_id:
                     options.resume = session_id
 
+                # Log the effective CLI invocation so failures are reproducible
+                logger.info(
+                    "Claude CLI invocation: model=%s max_turns=%s has_json_schema=%s "
+                    "has_tools=%s allowed=%s disallowed=%s permission_mode=%s cwd=%s",
+                    getattr(options, "model", None),
+                    getattr(options, "max_turns", None),
+                    getattr(options, "output_format", None) is not None,
+                    bool(getattr(options, "tools", None)),
+                    getattr(options, "allowed_tools", None),
+                    getattr(options, "disallowed_tools", None),
+                    getattr(options, "permission_mode", None),
+                    self.cwd,
+                )
+
                 # Run the query and yield messages
                 try:
                     async for message in query(prompt=prompt, options=options):
@@ -200,8 +214,10 @@ class ClaudeCodeCLI:
                                         pass
 
                             logger.debug(f"Converted message dict: {message_dict}")
+                            self._log_cli_errors(message_dict)
                             yield message_dict
                         else:
+                            self._log_cli_errors(message if isinstance(message, dict) else {})
                             yield message
                 finally:
                     # Clean up temp image files (both originals and CWD copies)
@@ -224,14 +240,60 @@ class ClaudeCodeCLI:
                             os.environ[key] = original_value
 
         except Exception as e:
-            logger.error(f"Claude Agent SDK error: {e}")
+            # Extract extra context the SDK attaches to ProcessError (exit_code, stderr)
+            details = {}
+            for attr in ("exit_code", "stderr", "stdout"):
+                val = getattr(e, attr, None)
+                if val not in (None, ""):
+                    details[attr] = val
+            logger.error(
+                "Claude Agent SDK error: %s (%s) details=%s",
+                e,
+                type(e).__name__,
+                details or "none",
+            )
             # Yield error message in the expected format
             yield {
                 "type": "result",
                 "subtype": "error_during_execution",
                 "is_error": True,
                 "error_message": str(e),
+                **({"exit_code": details["exit_code"]} if "exit_code" in details else {}),
             }
+
+    @staticmethod
+    def _log_cli_errors(message: Dict[str, Any]) -> None:
+        """Surface any error/warning signals embedded in CLI result messages.
+
+        The CLI reports problems like `error_max_turns`, `error_during_execution`,
+        or refusals via `subtype` + `is_error` + `errors` fields. These are not
+        thrown as exceptions — without explicit logging they are silently
+        swallowed and the caller just sees a generic non-200 downstream.
+        """
+        if not isinstance(message, dict):
+            return
+        subtype = message.get("subtype")
+        is_error = message.get("is_error")
+        errors = message.get("errors")
+        stop_reason = message.get("stop_reason")
+
+        if is_error or (subtype and subtype.startswith("error")):
+            logger.error(
+                "Claude CLI reported error: subtype=%s stop_reason=%s num_turns=%s "
+                "duration_ms=%s errors=%s session=%s",
+                subtype,
+                stop_reason,
+                message.get("num_turns"),
+                message.get("duration_ms"),
+                errors,
+                message.get("session_id"),
+            )
+        elif stop_reason == "refusal":
+            logger.warning(
+                "Claude CLI refused the request: session=%s num_turns=%s",
+                message.get("session_id"),
+                message.get("num_turns"),
+            )
 
     @staticmethod
     def _sanitize_schema_keys(schema: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
