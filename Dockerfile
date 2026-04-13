@@ -22,7 +22,7 @@ ENV POETRY_VERSION=2.3.3 \
 ENV PATH="$POETRY_HOME/bin:$VENV_PATH/bin:$PATH"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "poetry==$POETRY_VERSION"
+    pip install --root-user-action=ignore "poetry==$POETRY_VERSION"
 
 WORKDIR $PYSETUP_PATH
 
@@ -47,17 +47,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Non-root user (claude CLI refuses --dangerously-skip-permissions as root).
 # Home dir must be writable so the claude auth/credentials file can be mounted.
-RUN groupadd -g 1001 appgroup && \
-    useradd -u 1001 -g appgroup -m -d /home/appuser -s /bin/bash appuser && \
+# No explicit UID: matches the default that previous images used, so existing
+# claude-auth volumes (owned by the pre-existing UID) remain readable.
+RUN useradd -m -s /bin/bash appuser && \
     mkdir -p /app /workspace && \
-    chown -R appuser:appgroup /app /workspace
+    chown -R appuser:appuser /app /workspace
 
 # Copy the venv from the build stage (deps only, no source).
-COPY --from=build --chown=appuser:appgroup $VENV_PATH $VENV_PATH
+COPY --from=build --chown=appuser:appuser $VENV_PATH $VENV_PATH
 
 # Copy app source last: edits to src/ only invalidate this single layer.
 WORKDIR /app
-COPY --chown=appuser:appgroup . /app
+COPY --chown=appuser:appuser . /app
 
 USER appuser
 EXPOSE 8000
