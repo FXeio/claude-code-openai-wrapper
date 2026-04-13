@@ -1,0 +1,43 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Virtual envs (must be rebuilt inside the image)
+.venv
+venv
+env
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Local dev
+.env
+.env.local
+.env.*.local
+
+# Docs, tests, and examples not needed at runtime
+docs
+examples
+tests
+
+# macOS
+.DS_Store
+
+# Docker itself (avoid recursive include)
+Dockerfile
+.dockerignore
+docker-compose*.yml

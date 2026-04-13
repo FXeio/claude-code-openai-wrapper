@@ -1,7 +1,8 @@
 services:
   claude-wrapper:
     build: .
-    command: ["poetry", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # `command` omitted on purpose — the Dockerfile's CMD uses the venv on PATH,
+    # so no `poetry run` is needed (poetry is not installed in the runtime stage).
     restart: unless-stopped
     ports:
       - "8000"
